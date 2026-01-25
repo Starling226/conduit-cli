@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/Psiphon-Inc/conduit/cli/internal/conduit"
@@ -37,6 +38,7 @@ var (
 	bandwidthMbps     float64
 	psiphonConfigPath string
 	statsFilePath     string
+	metricsAddress    string
 )
 
 var startCmd = &cobra.Command{
@@ -63,6 +65,7 @@ func init() {
 	startCmd.Flags().Float64VarP(&bandwidthMbps, "bandwidth", "b", config.DefaultBandwidthMbps, "total bandwidth limit in Mbps (-1 for unlimited)")
 	startCmd.Flags().StringVarP(&statsFilePath, "stats-file", "s", "", "persist stats to JSON file (default: stats.json in data dir if flag used without value)")
 	startCmd.Flags().Lookup("stats-file").NoOptDefVal = "stats.json"
+	startCmd.Flags().StringVarP(&metricsAddress, "metrics-address", "", "", "address for Prometheus metrics endpoint (format: ip:port, :port, or port; empty to disable)")
 
 	// Only show --psiphon-config flag if no config is embedded
 	if !config.HasEmbeddedConfig() {
@@ -109,7 +112,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create conduit service
-	service, err := conduit.New(cfg)
+	service, err := conduit.New(cfg, metricsAddress)
 	if err != nil {
 		return fmt.Errorf("failed to create conduit service: %w", err)
 	}
@@ -134,6 +137,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 		bandwidthStr = fmt.Sprintf("%.0f Mbps", bandwidthMbps)
 	}
 	fmt.Printf("Starting Psiphon Conduit (Max Clients: %d, Bandwidth: %s)\n", cfg.MaxClients, bandwidthStr)
+
+	if metricsAddress != "" {
+		// Format address for display
+		displayAddr := metricsAddress
+		if displayAddr[0] == ':' {
+			// ":port" format - show as localhost:port
+			displayAddr = "localhost" + displayAddr
+		} else if !strings.Contains(displayAddr, ":") {
+			// Just a port number - show as localhost:port
+			displayAddr = "localhost:" + displayAddr
+		}
+		// If it already contains ":", it's in "ip:port" format, use as-is
+		fmt.Printf("Prometheus metrics available at http://%s/metrics\n", displayAddr)
+	}
 
 	// Run the service
 	if err := service.Run(ctx); err != nil && ctx.Err() == nil {

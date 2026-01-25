@@ -42,6 +42,15 @@ conduit start --psiphon-config ./psiphon_config.json -v
 
 # Debug output (everything)
 conduit start --psiphon-config ./psiphon_config.json -vv
+
+# Enable Prometheus metrics on port 9090 (binds to all interfaces)
+conduit start --psiphon-config ./psiphon_config.json --metrics-address 9090
+
+# Bind metrics to localhost only (more secure)
+conduit start --psiphon-config ./psiphon_config.json --metrics-address 127.0.0.1:9090
+
+# Bind to specific IP and port
+conduit start --psiphon-config ./psiphon_config.json --metrics-address 0.0.0.0:9090
 ```
 
 ### Options
@@ -52,6 +61,7 @@ conduit start --psiphon-config ./psiphon_config.json -vv
 | `--max-clients, -m` | 200 | Maximum concurrent clients (1-1000) |
 | `--bandwidth, -b` | 5 | Bandwidth limit per peer in Mbps (1-40) |
 | `--data-dir, -d` | `./data` | Directory for keys and state |
+| `--metrics-address` | "" | Address for Prometheus metrics endpoint (format: `ip:port`, `:port`, or `port`; empty to disable) |
 | `-v` | - | Verbose output (use `-vv` for debug) |
 
 ## Building
@@ -125,6 +135,35 @@ Keys and state are stored in the data directory (default: `./data`):
 - `conduit_key.json` - Node identity keypair (preserve this!)
 
 The broker builds reputation for your proxy based on this key. If you lose it, you'll need to build reputation from scratch.
+
+## Prometheus Metrics
+
+Conduit can export Prometheus metrics for monitoring. Enable it with the `--metrics-address` flag:
+
+```bash
+# Bind to all interfaces on port 9090
+conduit start --psiphon-config ./psiphon_config.json --metrics-address 9090
+
+# Or bind to localhost only (recommended for security)
+conduit start --psiphon-config ./psiphon_config.json --metrics-address 127.0.0.1:9090
+```
+
+The address format can be:
+- `port` - Just a port number (binds to all interfaces, e.g., `:9090`)
+- `:port` - Explicitly bind to all interfaces
+- `ip:port` - Bind to a specific IP address (e.g., `127.0.0.1:9090` or `0.0.0.0:9090`)
+
+Metrics will be available at `http://<address>/metrics`. The following metrics are exported:
+
+- `conduit_connecting_clients` - Number of clients currently connecting (gauge)
+- `conduit_connected_clients` - Number of clients currently connected (gauge)
+- `conduit_is_live` - Whether the proxy is connected to the broker (1) or not (0) (gauge)
+- `conduit_bytes_up_total` - Total bytes uploaded to clients (counter)
+- `conduit_bytes_down_total` - Total bytes downloaded from clients (counter)
+- `conduit_config_info` - Configuration information with labels `max_clients` and `bandwidth_mbps` (gauge)
+- `conduit_uptime_seconds` - Service uptime in seconds (gauge)
+
+These metrics update every 5 seconds and can be scraped by Prometheus or any compatible monitoring system.
 
 ## License
 

@@ -30,15 +30,18 @@ import (
 	"time"
 
 	"github.com/Psiphon-Inc/conduit/cli/internal/config"
+	"github.com/Psiphon-Inc/conduit/cli/internal/metrics"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon"
 )
 
 // Service represents the Conduit inproxy service
 type Service struct {
-	config     *config.Config
-	controller *psiphon.Controller
-	stats      *Stats
-	mu         sync.RWMutex
+	config         *config.Config
+	controller     *psiphon.Controller
+	stats          *Stats
+	mu             sync.RWMutex
+	exporter       *metrics.Exporter
+	metricsAddress string
 }
 
 // Stats tracks proxy activity statistics
@@ -63,13 +66,24 @@ type StatsJSON struct {
 }
 
 // New creates a new Conduit service
-func New(cfg *config.Config) (*Service, error) {
-	return &Service{
-		config: cfg,
+func New(cfg *config.Config, metricsAddress string) (*Service, error) {
+	s := &Service{
+		config:         cfg,
+		metricsAddress: metricsAddress,
 		stats: &Stats{
 			StartTime: time.Now(),
 		},
-	}, nil
+	}
+
+	// Initialize metrics exporter if metrics address is provided
+	if metricsAddress != "" {
+		s.exporter = metrics.NewExporter()
+		if err := s.exporter.Register(); err != nil {
+			return nil, fmt.Errorf("failed to register metrics: %w", err)
+		}
+	}
+
+	return s, nil
 }
 
 // Run starts the Conduit inproxy service and blocks until context is cancelled
@@ -80,6 +94,23 @@ func (s *Service) Run(ctx context.Context) error {
 			s.handleNotice(notice)
 		},
 	))
+
+	// Start metrics server if enabled
+	if s.exporter != nil {
+		metricsCtx, metricsCancel := context.WithCancel(ctx)
+		defer metricsCancel()
+
+		go func() {
+			if err := s.exporter.StartMetricsServer(metricsCtx, s.metricsAddress); err != nil {
+				if ctx.Err() == nil {
+					fmt.Printf("[WARN] Metrics server error: %v\n", err)
+				}
+			}
+		}()
+
+		// Start metrics update loop
+		go s.updateMetricsLoop(ctx)
+	}
 
 	// Create Psiphon configuration
 	psiphonConfig, err := s.createPsiphonConfig()
@@ -392,4 +423,46 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// updateMetricsLoop periodically updates Prometheus metrics
+func (s *Service) updateMetricsLoop(ctx context.Context) {
+	// Do an initial update immediately
+	if s.exporter != nil {
+		stats := s.GetStats()
+		s.exporter.Update(metrics.Stats{
+			ConnectingClients: stats.ConnectingClients,
+			ConnectedClients:  stats.ConnectedClients,
+			TotalBytesUp:      stats.TotalBytesUp,
+			TotalBytesDown:    stats.TotalBytesDown,
+			StartTime:         stats.StartTime,
+			IsLive:            stats.IsLive,
+			MaxClients:        s.config.MaxClients,
+			BandwidthMbps:     float64(s.config.BandwidthBytesPerSecond) * 8 / 1000000,
+		})
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if s.exporter != nil {
+				stats := s.GetStats()
+				s.exporter.Update(metrics.Stats{
+					ConnectingClients: stats.ConnectingClients,
+					ConnectedClients:  stats.ConnectedClients,
+					TotalBytesUp:      stats.TotalBytesUp,
+					TotalBytesDown:    stats.TotalBytesDown,
+					StartTime:         stats.StartTime,
+					IsLive:            stats.IsLive,
+					MaxClients:        s.config.MaxClients,
+					BandwidthMbps:     float64(s.config.BandwidthBytesPerSecond) * 8 / 1000000,
+				})
+			}
+		}
+	}
 }
