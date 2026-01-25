@@ -20,6 +20,7 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"strings"
 	"testing"
@@ -71,7 +72,7 @@ func TestDeriveKeyPairFromMnemonic(t *testing.T) {
 	}
 
 	// Verify that the public key matches the private key
-	derivedPublicKey := keyPair.PrivateKey.Public().(ed25519.PublicKey)
+	derivedPublicKey := ed25519.PrivateKey(keyPair.PrivateKey).Public().(ed25519.PublicKey)
 	if !ed25519.PublicKey(keyPair.PublicKey).Equal(derivedPublicKey) {
 		t.Fatal("PublicKey does not match the PrivateKey")
 	}
@@ -112,7 +113,7 @@ func TestGenerateMnemonicToDeriveKeyPair(t *testing.T) {
 	}
 
 	// Verify that the public key matches the private key
-	derivedPublicKey := keyPair.PrivateKey.Public().(ed25519.PublicKey)
+	derivedPublicKey := ed25519.PrivateKey(keyPair.PrivateKey).Public().(ed25519.PublicKey)
 	if !ed25519.PublicKey(keyPair.PublicKey).Equal(derivedPublicKey) {
 		t.Fatal("PublicKey does not match the PrivateKey")
 	}
@@ -142,7 +143,7 @@ func TestGenerateKeyPair(t *testing.T) {
 	}
 
 	// Verify that the public key matches the private key
-	derivedPublicKey := keyPair.PrivateKey.Public().(ed25519.PublicKey)
+	derivedPublicKey := ed25519.PrivateKey(keyPair.PrivateKey).Public().(ed25519.PublicKey)
 	if !ed25519.PublicKey(keyPair.PublicKey).Equal(derivedPublicKey) {
 		t.Fatal("PublicKey does not match the PrivateKey")
 	}
@@ -170,11 +171,11 @@ func TestParsePrivateKey(t *testing.T) {
 	}
 
 	// Verify that the parsed key pair matches the original
-	if !ed25519.PrivateKey(parsed.PrivateKey).Equal(original.PrivateKey) {
+	if !bytes.Equal(parsed.PrivateKey, original.PrivateKey) {
 		t.Fatal("Parsed PrivateKey does not match original")
 	}
 
-	if !ed25519.PublicKey(parsed.PublicKey).Equal(original.PublicKey) {
+	if !bytes.Equal(parsed.PublicKey, original.PublicKey) {
 		t.Fatal("Parsed PublicKey does not match original")
 	}
 }
@@ -224,11 +225,11 @@ func TestDeterministicDerivation(t *testing.T) {
 	}
 
 	// Verify that the same mnemonic produces the same keys
-	if !ed25519.PublicKey(keyPair1.PublicKey).Equal(keyPair2.PublicKey) {
+	if !bytes.Equal(keyPair1.PublicKey, keyPair2.PublicKey) {
 		t.Fatal("Same mnemonic should produce identical keys")
 	}
 
-	if !ed25519.PrivateKey(keyPair1.PrivateKey).Equal(keyPair2.PrivateKey) {
+	if !bytes.Equal(keyPair1.PrivateKey, keyPair2.PrivateKey) {
 		t.Fatal("Same mnemonic should produce identical private keys")
 	}
 }
