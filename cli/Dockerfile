@@ -15,7 +15,10 @@
 # client connections.
 
 # Build stage
-FROM golang:1.24-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 
 WORKDIR /build
 
@@ -31,13 +34,19 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build static binary
-RUN CGO_ENABLED=1 go build -tags "PSIPHON_ENABLE_INPROXY" \
+# Set GOARCH and GOARM based on target platform
+RUN case "$TARGETPLATFORM" in \
+    "linux/amd64") export GOARCH=amd64 ;; \
+    "linux/arm64") export GOARCH=arm64 ;; \
+    "linux/arm/v7") export GOARCH=arm GOARM=7 ;; \
+    *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
+    esac && \
+    CGO_ENABLED=1 GOOS=linux go build -tags "PSIPHON_ENABLE_INPROXY" \
     -ldflags="-s -w" \
     -o conduit .
 
 # Runtime stage - minimal Debian
-FROM debian:bookworm-slim
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
