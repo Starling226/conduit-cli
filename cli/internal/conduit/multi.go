@@ -41,6 +41,14 @@ const (
 	ClientsPerInstance = 100
 )
 
+// Compile regexes once at package initialization for performance
+var (
+	connectingRe = regexp.MustCompile(`Connecting:\s*(\d+)`)
+	connectedRe  = regexp.MustCompile(`Connected:\s*(\d+)`)
+	upRe         = regexp.MustCompile(`Up:\s*([\d.]+)\s*([KMGTPE]?B)`)
+	downRe       = regexp.MustCompile(`Down:\s*([\d.]+)\s*([KMGTPE]?B)`)
+)
+
 // InstanceStats tracks stats for a single instance
 type InstanceStats struct {
 	ID         string
@@ -190,10 +198,13 @@ func (m *MultiService) runInstance(ctx context.Context, idx int, dataDir string,
 		args = append(args, "-c", m.config.PsiphonConfigPath)
 	}
 
-	// Pass through verbosity (children always need at least -v to output STATS)
-	if m.config.Verbosity >= 2 {
-		args = append(args, "-vv")
-	} else {
+	// Pass through verbosity from parent to children
+	// Children need at least -v to output [STATS] lines for parsing
+	childVerbosity := m.config.Verbosity
+	if childVerbosity < 1 {
+		childVerbosity = 1 // Minimum -v required for stats output
+	}
+	for i := 0; i < childVerbosity; i++ {
 		args = append(args, "-v")
 	}
 
@@ -248,28 +259,30 @@ func (m *MultiService) parseInstanceOutput(idx int, line string) {
 
 	stats := m.instanceStats[idx]
 
+	// Always show "Connected to Psiphon network" events (important milestone)
 	if strings.Contains(line, "[OK] Connected to Psiphon network") {
 		stats.IsLive = true
 		fmt.Printf("[instance-%d] Connected to Psiphon network\n", idx)
 		return
 	}
 
+	// Parse stats lines for aggregation, but only print per-instance stats in verbose mode
 	if strings.Contains(line, "[STATS]") {
 		m.parseStatsLine(stats, line)
+		// Only show individual instance stats if verbose
+		if m.config.Verbosity >= 1 {
+			fmt.Printf("[instance-%d] %s\n", idx, line)
+		}
 		return
 	}
 
+	// All other output only shown in verbose mode
 	if m.config.Verbosity >= 1 {
 		fmt.Printf("[instance-%d] %s\n", idx, line)
 	}
 }
 
 func (m *MultiService) parseStatsLine(stats *InstanceStats, line string) {
-	connectingRe := regexp.MustCompile(`Connecting:\s*(\d+)`)
-	connectedRe := regexp.MustCompile(`Connected:\s*(\d+)`)
-	upRe := regexp.MustCompile(`Up:\s*([\d.]+)\s*([KMGTPE]?B)`)
-	downRe := regexp.MustCompile(`Down:\s*([\d.]+)\s*([KMGTPE]?B)`)
-
 	if match := connectingRe.FindStringSubmatch(line); len(match) > 1 {
 		if v, err := strconv.Atoi(match[1]); err == nil {
 			stats.Connecting = v
