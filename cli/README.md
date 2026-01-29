@@ -113,7 +113,10 @@ Example `stats.json`:
 | `bytes_up` | Total bytes uploaded since start |
 | `bytes_down` | Total bytes downloaded since start |
 
-Note: Connections through TURN relay servers appear as `RELAY` since the actual client country cannot be determined.
+**Notes:**
+- Connections through TURN relay servers appear as `RELAY` since the actual client country cannot be determined.
+- The `connectedClients` field is reported by the Psiphon broker and may differ slightly from the sum of geo `count` values, which are tracked locally via WebRTC callbacks.
+- Bandwidth (`bytes_up`/`bytes_down`) is attributed to a country when the connection closes. Active connections contribute to `totalBytesUp`/`totalBytesDown` but won't appear in geo stats until they disconnect.
 
 ## Building
 
