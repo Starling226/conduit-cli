@@ -32,6 +32,7 @@ import (
 	"github.com/Psiphon-Inc/conduit/cli/internal/config"
 	"github.com/Psiphon-Inc/conduit/cli/internal/geo"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon"
+	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/inproxy"
 )
 
 // Service represents the Conduit inproxy service
@@ -78,7 +79,8 @@ func New(cfg *config.Config) (*Service, error) {
 // Run starts the Conduit inproxy service and blocks until context is cancelled
 func (s *Service) Run(ctx context.Context) error {
 	if s.config.GeoEnabled {
-		s.geoCollector = geo.NewCollector(60 * time.Second)
+		dbPath := s.config.DataDir + "/GeoLite2-Country.mmdb"
+		s.geoCollector = geo.NewCollector(dbPath)
 		if err := s.geoCollector.Start(ctx); err != nil {
 			fmt.Printf("[WARN] Geo disabled: %v\n", err)
 			s.geoCollector = nil
@@ -189,6 +191,30 @@ func (s *Service) createPsiphonConfig() (*psiphon.Config, error) {
 	// Commit the config
 	if err := psiphonConfig.Commit(true); err != nil {
 		return nil, fmt.Errorf("failed to commit config: %w", err)
+	}
+
+	// Set up geo tracking callback if enabled
+	if s.geoCollector != nil {
+		psiphonConfig.OnInproxyConnectionEstablished = func(local, remote inproxy.ConnectionStats) {
+			if remote.IP == "" {
+				return
+			}
+			if remote.CandidateType == "relay" {
+				s.geoCollector.ConnectRelay(remote.IP)
+			} else {
+				s.geoCollector.ConnectIP(remote.IP)
+			}
+		}
+		psiphonConfig.OnInproxyConnectionClosed = func(remote *inproxy.ConnectionStats, bw *inproxy.BandwidthStats) {
+			if remote == nil || remote.IP == "" || bw == nil {
+				return
+			}
+			if remote.CandidateType == "relay" {
+				s.geoCollector.DisconnectRelay(remote.IP, bw.BytesUp, bw.BytesDown)
+			} else {
+				s.geoCollector.DisconnectIP(remote.IP, bw.BytesUp, bw.BytesDown)
+			}
+		}
 	}
 
 	return psiphonConfig, nil

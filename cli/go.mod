@@ -3,10 +3,10 @@ module github.com/Psiphon-Inc/conduit/cli
 go 1.24.0
 
 require (
+	github.com/oschwald/geoip2-golang v1.11.0
 	github.com/spf13/cobra v1.8.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.39.0
-	golang.org/x/term v0.32.0
 )
 
 require (
@@ -60,6 +60,7 @@ require (
 	github.com/miekg/dns v1.1.56 // indirect
 	github.com/mroth/weightedrand v1.0.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.12.0 // indirect
+	github.com/oschwald/maxminddb-golang v1.13.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pion/datachannel v1.5.5 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
@@ -118,6 +119,8 @@ require (
 
 // Use staging-client branch for inproxy support
 require github.com/Psiphon-Labs/psiphon-tunnel-core v0.0.0-20251128193008-996f485b1e13
+
+replace github.com/Psiphon-Labs/psiphon-tunnel-core => ./psiphon-tunnel-core
 
 // Required for PSIPHON_ENABLE_INPROXY build tag - use Psiphon's forked pion libraries
 // These are automatically set up by 'make setup' which clones psiphon-tunnel-core

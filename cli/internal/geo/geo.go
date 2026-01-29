@@ -17,205 +17,249 @@
  *
  */
 
-// Package geo provides client geolocation via tcpdump and geoiplookup
+// Package geo provides client geolocation using MaxMind GeoLite2 database
 package geo
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
-	"regexp"
+	"net"
 	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/oschwald/geoip2-golang"
 )
 
-// Result represents a country with its client count
+// Result represents a country with connection stats
 type Result struct {
-	Code    string `json:"code"`
-	Country string `json:"country"`
-	Count   int    `json:"count"`
+	Code       string `json:"code"`
+	Country    string `json:"country"`
+	Count      int    `json:"count"`       // Currently connected clients
+	CountTotal int    `json:"count_total"` // Total unique clients since start
+	BytesUp    int64  `json:"bytes_up"`    // Total bytes since start
+	BytesDown  int64  `json:"bytes_down"`  // Total bytes since start
 }
 
-// Collector continuously collects geo stats in the background
+// countryData stores stats per country
+type countryData struct {
+	name      string
+	live      int                 // currently open connections
+	totalIPs  map[string]struct{} // all unique IPs ever seen
+	bytesUp   int64
+	bytesDown int64
+}
+
+// Collector collects geo stats
 type Collector struct {
-	mu       sync.RWMutex
-	results  []Result
-	interval time.Duration
-	iface    string
-	packets  int
-	timeout  int
+	mu        sync.RWMutex
+	countries map[string]*countryData // country code -> data
+	relayLive int                     // currently open relay connections
+	relayAll  map[string]struct{}     // all unique relay IPs ever seen
+	relayUp   int64
+	relayDown int64
+	db        *geoip2.Reader
+	dbPath    string
 }
 
 // NewCollector creates a new geo stats collector
-func NewCollector(interval time.Duration) *Collector {
+func NewCollector(dbPath string) *Collector {
 	return &Collector{
-		interval: interval,
-		iface:    "any",
-		packets:  500,
-		timeout:  30,
+		dbPath:    dbPath,
+		countries: make(map[string]*countryData),
+		relayAll:  make(map[string]struct{}),
 	}
 }
 
 // Start begins collecting geo stats in the background
 func (c *Collector) Start(ctx context.Context) error {
-	if err := CheckDependencies(); err != nil {
-		return err
+	if err := EnsureDatabase(c.dbPath); err != nil {
+		return fmt.Errorf("failed to ensure database: %w", err)
 	}
-	go c.run(ctx)
+
+	db, err := geoip2.Open(c.dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open GeoIP database: %w", err)
+	}
+	c.db = db
+
+	go c.autoUpdate(ctx)
+
 	return nil
 }
 
-func (c *Collector) run(ctx context.Context) {
-	c.collect()
-	ticker := time.NewTicker(c.interval)
+// Stop closes the database
+func (c *Collector) Stop() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.db != nil {
+		return c.db.Close()
+	}
+	return nil
+}
+
+// ConnectIP records a new connection from an IP (call when connection opens)
+func (c *Collector) ConnectIP(ipStr string) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || isPrivateIP(ip) {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.db == nil {
+		return
+	}
+
+	record, err := c.db.Country(ip)
+	if err != nil || record.Country.IsoCode == "" {
+		return
+	}
+
+	code := record.Country.IsoCode
+	cd, exists := c.countries[code]
+	if !exists {
+		name := code
+		if countryName, ok := record.Country.Names["en"]; ok && countryName != "" {
+			name = countryName
+		}
+		cd = &countryData{
+			name:     name,
+			totalIPs: make(map[string]struct{}),
+		}
+		c.countries[code] = cd
+	}
+
+	cd.live++
+	cd.totalIPs[ipStr] = struct{}{}
+}
+
+// DisconnectIP records bandwidth and closes connection (call when connection closes)
+func (c *Collector) DisconnectIP(ipStr string, bytesUp, bytesDown int64) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || isPrivateIP(ip) {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.db == nil {
+		return
+	}
+
+	record, err := c.db.Country(ip)
+	if err != nil || record.Country.IsoCode == "" {
+		return
+	}
+
+	code := record.Country.IsoCode
+	cd, exists := c.countries[code]
+	if !exists {
+		// Shouldn't happen, but handle gracefully
+		name := code
+		if countryName, ok := record.Country.Names["en"]; ok && countryName != "" {
+			name = countryName
+		}
+		cd = &countryData{
+			name:     name,
+			totalIPs: make(map[string]struct{}),
+		}
+		c.countries[code] = cd
+	}
+
+	if cd.live > 0 {
+		cd.live--
+	}
+	cd.totalIPs[ipStr] = struct{}{}
+	cd.bytesUp += bytesUp
+	cd.bytesDown += bytesDown
+}
+
+// ConnectRelay records a new relay connection (call when connection opens)
+func (c *Collector) ConnectRelay(ipStr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.relayLive++
+	c.relayAll[ipStr] = struct{}{}
+}
+
+// DisconnectRelay records bandwidth and closes relay connection (call when connection closes)
+func (c *Collector) DisconnectRelay(ipStr string, bytesUp, bytesDown int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.relayLive > 0 {
+		c.relayLive--
+	}
+	c.relayAll[ipStr] = struct{}{}
+	c.relayUp += bytesUp
+	c.relayDown += bytesDown
+}
+
+// autoUpdate checks for database updates once per day
+func (c *Collector) autoUpdate(ctx context.Context) {
+	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.collect()
+			if err := UpdateDatabase(c.dbPath); err != nil {
+				continue
+			}
+			c.mu.Lock()
+			if c.db != nil {
+				c.db.Close()
+			}
+			db, err := geoip2.Open(c.dbPath)
+			if err == nil {
+				c.db = db
+			}
+			c.mu.Unlock()
 		}
 	}
 }
 
-func (c *Collector) collect() {
-	ips, err := CaptureIPs(c.iface, c.packets, c.timeout)
-	if err != nil || len(ips) == 0 {
-		return
-	}
-
-	results, err := LookupIPs(ips)
-	if err != nil {
-		return
-	}
-
-	c.mu.Lock()
-	c.results = results
-	c.mu.Unlock()
-}
-
-// GetResults returns the current geo stats
+// GetResults returns the current geo stats (includes relay as special entry)
 func (c *Collector) GetResults() []Result {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.results == nil {
-		return []Result{}
+
+	results := make([]Result, 0, len(c.countries)+1)
+	for code, cd := range c.countries {
+		results = append(results, Result{
+			Code:       code,
+			Country:    cd.name,
+			Count:      cd.live,
+			CountTotal: len(cd.totalIPs),
+			BytesUp:    cd.bytesUp,
+			BytesDown:  cd.bytesDown,
+		})
 	}
-	out := make([]Result, len(c.results))
-	for i, r := range c.results {
-		out[i] = r
+
+	// Add relay stats as special entry if any relay connections occurred
+	if len(c.relayAll) > 0 || c.relayLive > 0 {
+		results = append(results, Result{
+			Code:       "RELAY",
+			Country:    "Unknown (TURN Relay)",
+			Count:      c.relayLive,
+			CountTotal: len(c.relayAll),
+			BytesUp:    c.relayUp,
+			BytesDown:  c.relayDown,
+		})
 	}
-	return out
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Count > results[j].Count
+	})
+
+	return results
 }
 
-// CheckDependencies verifies tcpdump and geoiplookup are installed
-func CheckDependencies() error {
-	if _, err := exec.LookPath("tcpdump"); err != nil {
-		return fmt.Errorf("tcpdump not found (apt install tcpdump)")
-	}
-	if _, err := exec.LookPath("geoiplookup"); err != nil {
-		return fmt.Errorf("geoiplookup not found (apt install geoip-bin)")
-	}
-	return nil
-}
-
-func CaptureIPs(iface string, packets, timeout int) ([]string, error) {
-	cmd := exec.Command("timeout", fmt.Sprintf("%d", timeout), "tcpdump",
-		"-ni", iface, "-c", fmt.Sprintf("%d", packets), "inbound and (tcp or udp)")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	ipSet := make(map[string]struct{})
-	ipRegex := regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, " In ") {
-			continue
-		}
-		if m := ipRegex.FindStringSubmatch(line); len(m) > 0 && !isPrivateIP(m[1]) {
-			ipSet[m[1]] = struct{}{}
-		}
-	}
-	cmd.Wait()
-
-	ips := make([]string, 0, len(ipSet))
-	for ip := range ipSet {
-		ips = append(ips, ip)
-	}
-	return ips, nil
-}
-
-func LookupIPs(ips []string) ([]Result, error) {
-	counts := make(map[string]int)
-	names := make(map[string]string)
-	re := regexp.MustCompile(`GeoIP Country Edition: ([A-Z]{2}), (.+)`)
-
-	for _, ip := range ips {
-		out, err := exec.Command("geoiplookup", ip).Output()
-		if err != nil {
-			continue
-		}
-		if m := re.FindStringSubmatch(string(out)); len(m) == 3 {
-			counts[m[1]]++
-			names[m[1]] = normalizeCountry(m[2])
-		}
-	}
-
-	results := make([]Result, 0, len(counts))
-	for code, count := range counts {
-		results = append(results, Result{Code: code, Country: names[code], Count: count})
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].Count > results[j].Count })
-	return results, nil
-}
-
-func isPrivateIP(ip string) bool {
-	if strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "127.") {
-		return true
-	}
-	if strings.HasPrefix(ip, "172.") {
-		var b int
-		fmt.Sscanf(ip, "172.%d.", &b)
-		return b >= 16 && b <= 31
-	}
-	return false
-}
-
-func normalizeCountry(name string) string {
-	mapping := map[string]string{
-		"Iran, Islamic Republic of":                  "Iran",
-		"Korea, Republic of":                         "South Korea",
-		"Korea, Democratic People's Republic of":     "North Korea",
-		"Russian Federation":                         "Russia",
-		"United States":                              "USA",
-		"United Kingdom":                             "UK",
-		"United Arab Emirates":                       "UAE",
-		"Viet Nam":                                   "Vietnam",
-		"Taiwan, Province of China":                  "Taiwan",
-		"Syrian Arab Republic":                       "Syria",
-		"Venezuela, Bolivarian Republic of":          "Venezuela",
-		"Tanzania, United Republic of":               "Tanzania",
-		"Congo, The Democratic Republic of the":      "DR Congo",
-		"Moldova, Republic of":                       "Moldova",
-		"Palestine, State of":                        "Palestine",
-		"Lao People's Democratic Republic":           "Laos",
-		"Micronesia, Federated States of":            "Micronesia",
-		"Macedonia, the Former Yugoslav Republic of": "North Macedonia",
-		"Bolivia, Plurinational State of":            "Bolivia",
-		"Brunei Darussalam":                          "Brunei",
-	}
-	if short, ok := mapping[name]; ok {
-		return short
-	}
-	return name
+// isPrivateIP checks if an IP is private/internal
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
