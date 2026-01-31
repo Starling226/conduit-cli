@@ -131,6 +131,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		ConnectingClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "proxy",
 				Name:      "connecting_clients",
 				Help:      "Number of clients currently connecting to the proxy",
 			},
@@ -138,6 +139,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		ConnectedClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "proxy",
 				Name:      "connected_clients",
 				Help:      "Number of clients currently connected to the proxy",
 			},
@@ -145,6 +147,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		IsLive: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "service",
 				Name:      "is_live",
 				Help:      "Whether the service is connected to the Psiphon broker (1 = connected, 0 = disconnected)",
 			},
@@ -152,6 +155,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		MaxClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "service",
 				Name:      "max_clients",
 				Help:      "Maximum number of proxy clients allowed",
 			},
@@ -159,6 +163,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		BandwidthLimit: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "proxy",
 				Name:      "bandwidth_limit_bytes_per_second",
 				Help:      "Configured bandwidth limit in bytes per second (0 = unlimited)",
 			},
@@ -166,6 +171,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		BytesUploaded: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "proxy",
 				Name:      "bytes_uploaded",
 				Help:      "Total number of bytes uploaded through the proxy",
 			},
@@ -173,6 +179,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		BytesDownloaded: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "proxy",
 				Name:      "bytes_downloaded",
 				Help:      "Total number of bytes downloaded through the proxy",
 			},
@@ -180,6 +187,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 		BuildInfo: newGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
+				Subsystem: "service",
 				Name:      "build_info",
 				Help:      "Build information about the Conduit service",
 			},
@@ -192,6 +200,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 	newGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
+			Subsystem: "service",
 			Name:      "uptime_seconds",
 			Help:      "Number of seconds since the service started",
 		},
@@ -200,6 +209,7 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 	newGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
+			Subsystem: "proxy",
 			Name:      "idle_seconds",
 			Help:      "Number of seconds the proxy has been idle (0 connecting and 0 connected clients)",
 		},
