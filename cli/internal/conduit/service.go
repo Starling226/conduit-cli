@@ -533,6 +533,7 @@ func (s *Service) GetStats() Stats {
 
 // formatBytes formats bytes as a human-readable string
 func formatBytes(bytes int64) string {
+	return fmt.Sprintf("%d B", bytes)
 	const unit = 1024
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
