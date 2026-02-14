@@ -288,6 +288,11 @@ func (s *Service) updateMetrics() {
 	s.metrics.SetConnectedClients(s.stats.ConnectedClients)
 	s.metrics.SetBytesUploaded(float64(s.stats.TotalBytesUp))
 	s.metrics.SetBytesDownloaded(float64(s.stats.TotalBytesDown))
+
+	// Update geo metrics if geo tracking is enabled
+	if s.geoCollector != nil {
+		s.metrics.UpdateGeo(s.geoCollector.GetResults())
+	}
 }
 
 // getUptimeSeconds returns the uptime in seconds (thread-safe, for Prometheus scrape)
