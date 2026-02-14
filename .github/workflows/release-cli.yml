@@ -156,6 +156,7 @@ jobs:
             cli/dist/conduit-linux-arm
             cli/dist/conduit-monitor-linux-amd64
             cli/dist/conduit-monitor-linux-arm64
+            cli/dist/conduit-monitor-linux-arm
             cli/dist/conduit-darwin-amd64
             cli/dist/conduit-darwin-arm64
             cli/dist/conduit-windows-amd64.exe

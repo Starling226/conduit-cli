@@ -136,6 +136,7 @@ build-linux-arm: check-go check-setup
 
 build-linux-arm32: check-go check-setup
 	$(call GO_BUILD,dist/conduit-linux-arm,,linux,arm,7)
+	$(call GO_BUILD_MONITOR,dist/conduit-monitor-linux-arm,linux,arm)
 
 build-darwin: check-go check-setup
 	$(call GO_BUILD,dist/conduit-darwin-amd64,,darwin,amd64)
@@ -171,6 +172,7 @@ build-all-embedded: check-go check-setup check-psiphon-config
 	@echo "Building monitor for all platforms..."
 	$(call GO_BUILD_MONITOR,dist/conduit-monitor-linux-amd64,linux,amd64)
 	$(call GO_BUILD_MONITOR,dist/conduit-monitor-linux-arm64,linux,arm64)
+	$(call GO_BUILD_MONITOR,dist/conduit-monitor-linux-arm,linux,arm)
 	$(call GO_BUILD_MONITOR,dist/conduit-monitor-darwin-amd64,darwin,amd64)
 	$(call GO_BUILD_MONITOR,dist/conduit-monitor-darwin-arm64,darwin,arm64)
 	$(call GO_BUILD_MONITOR,dist/conduit-monitor-windows-amd64.exe,windows,amd64)
