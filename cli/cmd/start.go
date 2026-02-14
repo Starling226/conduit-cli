@@ -31,6 +31,7 @@ import (
 
 	"github.com/Psiphon-Inc/conduit/cli/internal/conduit"
 	"github.com/Psiphon-Inc/conduit/cli/internal/config"
+	"github.com/Psiphon-Inc/conduit/cli/internal/logging"
 	"github.com/spf13/cobra"
 )
 
@@ -160,7 +161,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\nShutting down...")
+		logging.Println("Shutting down...")
 		cancel()
 	}()
 
@@ -195,6 +196,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 		break
 	}
 
-	fmt.Println("Stopped.")
+	logging.Println("Stopped.")
 	return nil
 }

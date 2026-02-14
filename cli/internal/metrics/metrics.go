@@ -22,12 +22,15 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Psiphon-Inc/conduit/cli/internal/geo"
+	"github.com/Psiphon-Inc/conduit/cli/internal/logging"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/buildinfo"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -39,6 +42,7 @@ const namespace = "conduit"
 // Metrics holds all Prometheus metrics for the Conduit service
 type Metrics struct {
 	// Gauges
+	Announcing        prometheus.Gauge
 	ConnectingClients prometheus.Gauge
 	ConnectedClients  prometheus.Gauge
 	IsLive            prometheus.Gauge
@@ -75,98 +79,121 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 	registry := prometheus.NewRegistry()
 
 	// Add standard Go metrics
-	registry.MustRegister(collectors.NewGoCollector())
-	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registerCollector(collectors.NewGoCollector(), registry)
+	registerCollector(
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		registry,
+	)
 
 	m := &Metrics{
-		ConnectingClients: prometheus.NewGauge(
+		Announcing: newGauge(
+			prometheus.GaugeOpts{
+				Namespace: namespace,
+				Name:      "announcing",
+				Help:      "Number of inproxy announcement requests in flight",
+			},
+			registry,
+		),
+		ConnectingClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "connecting_clients",
 				Help:      "Number of clients currently connecting to the proxy",
 			},
+			registry,
 		),
-		ConnectedClients: prometheus.NewGauge(
+		ConnectedClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "connected_clients",
 				Help:      "Number of clients currently connected to the proxy",
 			},
+			registry,
 		),
-		IsLive: prometheus.NewGauge(
+		IsLive: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "is_live",
 				Help:      "Whether the service is connected to the Psiphon broker (1 = connected, 0 = disconnected)",
 			},
+			registry,
 		),
-		MaxClients: prometheus.NewGauge(
+		MaxClients: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "max_clients",
 				Help:      "Maximum number of proxy clients allowed",
 			},
+			registry,
 		),
-		BandwidthLimit: prometheus.NewGauge(
+		BandwidthLimit: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "bandwidth_limit_bytes_per_second",
 				Help:      "Configured bandwidth limit in bytes per second (0 = unlimited)",
 			},
+			registry,
 		),
-		BytesUploaded: prometheus.NewGauge(
+		BytesUploaded: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "bytes_uploaded",
 				Help:      "Total number of bytes uploaded through the proxy",
 			},
+			registry,
 		),
-		BytesDownloaded: prometheus.NewGauge(
+		BytesDownloaded: newGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "bytes_downloaded",
 				Help:      "Total number of bytes downloaded through the proxy",
 			},
+			registry,
 		),
-		geoConnectedClients: prometheus.NewGaugeVec(
+		geoConnectedClients: newGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "geo_connected_clients",
 				Help:      "Number of currently connected clients by country",
 			},
 			[]string{"country_code"},
+			registry,
 		),
-		geoTotalClients: prometheus.NewCounterVec(
+		geoTotalClients: newCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "geo_clients_total",
 				Help:      "Total unique clients by country since start",
 			},
 			[]string{"country_code"},
+			registry,
 		),
-		geoBytesUploadedVec: prometheus.NewCounterVec(
+		geoBytesUploadedVec: newCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "geo_bytes_uploaded_total",
 				Help:      "Total bytes uploaded by country",
 			},
 			[]string{"country_code"},
+			registry,
 		),
-		geoBytesDownloadedVec: prometheus.NewCounterVec(
+		geoBytesDownloadedVec: newCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "geo_bytes_downloaded_total",
 				Help:      "Total bytes downloaded by country",
 			},
 			[]string{"country_code"},
+			registry,
 		),
-		BuildInfo: prometheus.NewGaugeVec(
+		BuildInfo: newGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "build_info",
 				Help:      "Build information about the Conduit service",
 			},
 			[]string{"build_repo", "build_rev", "go_version", "values_rev"},
+			registry,
 		),
 
 		// Internal state
@@ -175,43 +202,34 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 	}
 
 	// Create GaugeFunc metrics (computed at scrape time)
-	uptimeSeconds := prometheus.NewGaugeFunc(
+	newGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "uptime_seconds",
 			Help:      "Number of seconds since the service started",
 		},
 		gaugeFuncs.GetUptimeSeconds,
+		registry,
 	)
-	idleSeconds := prometheus.NewGaugeFunc(
+	newGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "idle_seconds",
 			Help:      "Number of seconds the proxy has been idle (0 connecting and 0 connected clients)",
 		},
 		gaugeFuncs.GetIdleSeconds,
+		registry,
 	)
 
-	// Register all metrics
-	registry.MustRegister(m.ConnectingClients)
-	registry.MustRegister(m.ConnectedClients)
-	registry.MustRegister(m.geoConnectedClients)
-	registry.MustRegister(m.geoTotalClients)
-	registry.MustRegister(m.geoBytesUploadedVec)
-	registry.MustRegister(m.geoBytesDownloadedVec)
-	registry.MustRegister(m.IsLive)
-	registry.MustRegister(m.MaxClients)
-	registry.MustRegister(m.BandwidthLimit)
-	registry.MustRegister(uptimeSeconds)
-	registry.MustRegister(idleSeconds)
-	registry.MustRegister(m.BytesUploaded)
-	registry.MustRegister(m.BytesDownloaded)
-	registry.MustRegister(m.BuildInfo)
-
 	// Set build info
-
 	buildInfo := buildinfo.GetBuildInfo()
-	m.BuildInfo.WithLabelValues(buildInfo.BuildRepo, buildInfo.BuildRev, buildInfo.GoVersion, buildInfo.ValuesRev).Set(1)
+	m.BuildInfo.
+		WithLabelValues(
+			buildInfo.BuildRepo,
+			buildInfo.BuildRev,
+			buildInfo.GoVersion,
+			buildInfo.ValuesRev).
+		Set(1)
 
 	return m
 }
@@ -220,6 +238,11 @@ func New(gaugeFuncs GaugeFuncs) *Metrics {
 func (m *Metrics) SetConfig(maxClients int, bandwidthBytesPerSecond int) {
 	m.MaxClients.Set(float64(maxClients))
 	m.BandwidthLimit.Set(float64(bandwidthBytesPerSecond))
+}
+
+// SetAnnouncing updates the announcing gauge
+func (m *Metrics) SetAnnouncing(count int) {
+	m.Announcing.Set(float64(count))
 }
 
 // SetConnectingClients updates the connecting clients gauge
@@ -284,7 +307,14 @@ func (m *Metrics) StartServer(addr string) error {
 		EnableOpenMetrics: true,
 	}))
 
-	m.server = &http.Server{Addr: addr, Handler: mux}
+	m.server = &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  10 * time.Second,
+		TLSConfig:    nil,
+	}
 
 	// Create a listener to verify the port is available before starting the server
 	listener, err := net.Listen("tcp", addr)
@@ -294,8 +324,8 @@ func (m *Metrics) StartServer(addr string) error {
 
 	// Start server in background with the pre-created listener
 	go func() {
-		if err := m.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("[ERROR] Metrics server error: %v\n", err)
+		if err := m.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logging.Printf("[ERROR] Metrics server error: %v\n", err)
 		}
 	}()
 
